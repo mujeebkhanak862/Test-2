@@ -1,0 +1,178 @@
+
+name: Universal Device Agent Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  locate:
+    name: Locate Flutter Project
+    runs-on: ubuntu-latest
+    outputs:
+      app_dir: ${{ steps.detect.outputs.app_dir }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Find Flutter Project
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for dir in \
+            universal_device_agent/shared_app \
+            shared_app \
+            APK/shared_app \
+            .
+          do
+            if [ -f "$dir/pubspec.yaml" ]; then
+              echo "app_dir=$dir" >> "$GITHUB_OUTPUT"
+              echo "Flutter project found: $dir"
+              exit 0
+            fi
+          done
+
+          echo "ERROR: Flutter pubspec.yaml not found."
+          find . -maxdepth 5 -name pubspec.yaml -print
+          exit 1
+
+  android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    needs: locate
+
+    defaults:
+      run:
+        working-directory: ${{ needs.locate.outputs.app_dir }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Check Flutter Project
+        run: |
+          flutter --version
+          test -f pubspec.yaml
+          test -d android
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Universal-Device-Agent-APK
+          path: ${{ needs.locate.outputs.app_dir }}/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+
+  windows:
+    name: Build Windows EXE
+    runs-on: windows-latest
+    needs: locate
+
+    defaults:
+      run:
+        working-directory: ${{ needs.locate.outputs.app_dir }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Enable Windows Desktop
+        shell: pwsh
+        run: |
+          if (!(Test-Path "windows/CMakeLists.txt")) {
+            flutter create --platforms=windows .
+          }
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Build Windows Release
+        run: flutter build windows --release
+
+      - name: Upload Windows Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Universal-Device-Agent-Windows
+          path: ${{ needs.locate.outputs.app_dir }}/build/windows/x64/runner/Release/
+          if-no-files-found: error
+
+  linux:
+    name: Build Linux / ChromeOS App
+    runs-on: ubuntu-latest
+    needs: locate
+
+    defaults:
+      run:
+        working-directory: ${{ needs.locate.outputs.app_dir }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux Build Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            clang \
+            cmake \
+            ninja-build \
+            pkg-config \
+            libgtk-3-dev \
+            liblzma-dev
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Enable Linux Desktop
+        run: |
+          if [ ! -f linux/CMakeLists.txt ]; then
+            flutter create --platforms=linux .
+          fi
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Build Linux Release
+        run: flutter build linux --release
+
+      - name: Upload Linux Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Universal-Device-Agent-Linux
+          path: ${{ needs.locate.outputs.app_dir }}/build/linux/x64/release/bundle/
+          if-no-files-found: error
